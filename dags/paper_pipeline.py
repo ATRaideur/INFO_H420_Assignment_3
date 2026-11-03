@@ -63,6 +63,8 @@ def research_library():
 
     @task
     def list_pdfs():
+        import sqlite3
+
         papers_dir = Path.home() / "Documents/ResearchLibraryDrive/papers"
 
         if not papers_dir.is_dir():
@@ -70,13 +72,29 @@ def research_library():
                 "Papers folder unavailable. Check that rclone mount is running."
             )
 
+        db_path = (
+                Path(__file__).resolve().parents[1]
+                / "data"
+                / "papers.db"
+        )
+
+        processed = set()
+
+        if db_path.is_file():
+            with sqlite3.connect(db_path) as connection:
+                rows = connection.execute(
+                    "SELECT filename FROM papers"
+                ).fetchall()
+
+                processed = {row[0] for row in rows}
+
         pdfs = sorted(
             str(pdf)
             for pdf in papers_dir.glob("*.pdf")
-            if pdf.is_file()
+            if pdf.is_file() and pdf.name not in processed
         )
 
-        print(f"Found {len(pdfs)} PDF(s).")
+        print(f"Found {len(pdfs)} new PDF(s).")
 
         for pdf in pdfs:
             print(pdf)
@@ -146,10 +164,132 @@ def research_library():
                 records.append(record)
 
         return records
+
+    @task
+    def save_metadata(records):
+        import sqlite3
+
+        db_path = (
+                Path(__file__).resolve().parents[1]
+                / "data"
+                / "papers.db"
+        )
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("""
+                               CREATE TABLE IF NOT EXISTS papers (
+                                                                     filename TEXT PRIMARY KEY,
+                                                                     title TEXT NOT NULL,
+                                                                     summary TEXT NOT NULL,
+                                                                     keywords TEXT NOT NULL,
+                                                                     category TEXT NOT NULL
+                               )
+                               """)
+
+            inserted = 0
+
+            for record in records:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO papers (
+                        filename, title, summary, keywords, category
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(filename) DO NOTHING
+                    """,
+                    (
+                        record["filename"],
+                        record["title"],
+                        record["summary"],
+                        json.dumps(
+                            record["keywords"],
+                            ensure_ascii=False,
+                        ),
+                        record["category"],
+                    ),
+                )
+                inserted += cursor.rowcount
+
+        print(f"Saved {inserted} new paper(s) to {db_path}")
+        return inserted
+
+    @task
+    def generate_html():
+        import sqlite3
+        from html import escape
+
+        db_path = (
+                Path(__file__).resolve().parents[1]
+                / "data"
+                / "papers.db"
+        )
+
+        output_dir = (
+                Path.home()
+                / "Documents/ResearchLibraryDrive/output"
+        )
+
+        if not output_dir.is_dir():
+            raise FileNotFoundError(
+                "Output folder unavailable. Check the Drive mount."
+            )
+
+        with sqlite3.connect(db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            papers = connection.execute(
+                "SELECT * FROM papers ORDER BY title"
+            ).fetchall()
+
+        cards = []
+
+        for paper in papers:
+            keywords = ", ".join(json.loads(paper["keywords"]))
+
+            cards.append(f"""
+                <article>
+                    <h2>{escape(paper["title"])}</h2>
+                    <p>{escape(paper["summary"])}</p>
+                    <p><strong>Category:</strong>
+                        {escape(paper["category"])}</p>
+                    <p><strong>Keywords:</strong>
+                        {escape(keywords)}</p>
+                    <p><small>{escape(paper["filename"])}</small></p>
+                </article>
+            """)
+
+        html = """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <title>Research Library</title>
+            <style>
+                body { font-family: sans-serif; max-width: 900px;
+                       margin: 40px auto; padding: 0 20px; }
+                article { border-bottom: 1px solid #ddd;
+                          padding: 16px 0; }
+            </style>
+        </head>
+        <body>
+            <h1>Research Library</h1>
+        """ + "\n".join(cards) + """
+        </body>
+        </html>
+        """
+
+        output_path = output_dir / "index.html"
+        output_path.write_text(html, encoding="utf-8")
+
+        print(f"Generated HTML with {len(papers)} paper(s).")
+        return str(output_path)
+
     started = start_pipeline()
     pdfs = list_pdfs()
     converted = convert_to_markdown(pdfs)
     metadata = generate_metadata(converted)
+    saved = save_metadata(metadata)
+    saved >> generate_html()
 
     started >> pdfs
 pipeline = research_library()
