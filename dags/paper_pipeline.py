@@ -3,7 +3,7 @@ from pathlib import Path
 
 from airflow.sdk import dag, task
 from metadata_utils import validate_metadata
-
+import pendulum
 
 def request_metadata(client, text):
     messages = [
@@ -52,8 +52,10 @@ def request_metadata(client, text):
 
 @dag(
     dag_id="research_library",
-    schedule=None,
+    start_date=pendulum.datetime(2026, 11, 5, tz="Europe/Brussels"),
+    schedule="*/10 * * * *",
     catchup=False,
+    max_active_runs=1,
 )
 def research_library():
 
@@ -115,9 +117,8 @@ def research_library():
 
         markdown_paths = []
 
-        # One PDF first (tested works with multiple files but slow af).
-        # TODO: maybe use threads here to proces files or other parallelisation mechanisme
-        for pdf_path in pdf_paths[:1]:
+
+        for pdf_path in pdf_paths:
             pdf = Path(pdf_path)
 
             markdown = pymupdf4llm.to_markdown(str(pdf))
@@ -271,9 +272,28 @@ def research_library():
                           padding: 16px 0; }
             </style>
         </head>
+
         <body>
             <h1>Research Library</h1>
+            <label for="search">Search papers:</label>
+            <input id="search" type="search"
+               placeholder="Title, summary, keywords, category..."
+               style="width: 100%; padding: 10px; box-sizing: border-box;">
+            
         """ + "\n".join(cards) + """
+        
+        <script>
+            const search = document.getElementById("search");
+            const papers = document.querySelectorAll("article");
+        
+            search.addEventListener("input", function () {
+                const query = search.value.trim().toLowerCase();
+        
+                for (const paper of papers) {
+                    paper.hidden = !paper.textContent.toLowerCase().includes(query);
+                }
+            });
+        </script>
         </body>
         </html>
         """
@@ -284,12 +304,39 @@ def research_library():
         print(f"Generated HTML with {len(papers)} paper(s).")
         return str(output_path)
 
+
+    @task
+    def notify_discord(inserted):
+        import os
+        import requests
+
+        if inserted == 0:
+            print("No new papers: no notification needed.")
+            return
+
+        response = requests.post(
+            os.environ["DISCORD_WEBHOOK_URL"],
+            params={"wait": "true"},
+            json={
+                "content": (
+                    f"Research Library: {inserted} new paper(s) processed. "
+                    "The HTML library has been updated."
+                )
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+
     started = start_pipeline()
     pdfs = list_pdfs()
     converted = convert_to_markdown(pdfs)
     metadata = generate_metadata(converted)
     saved = save_metadata(metadata)
-    saved >> generate_html()
+    html = generate_html()
+    notified = notify_discord(saved)
+
+    started >> pdfs
+    saved >> html >> notified
 
     started >> pdfs
 pipeline = research_library()
