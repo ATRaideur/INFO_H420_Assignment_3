@@ -20,6 +20,7 @@ def request_metadata(client, text):
         {"role": "user", "content": text},
     ]
 
+    # retry once if the model returns invalid JSON or metadata
     for attempt in range(2):
         response = client.chat.completions.create(
             model="qwen2.5:3b",
@@ -53,7 +54,7 @@ def request_metadata(client, text):
 @dag(
     dag_id="research_library",
     start_date=pendulum.datetime(2026, 11, 5, tz="Europe/Brussels"),
-    schedule="*/10 * * * *",
+    schedule="*/10 * * * *",  # check for new papers every 10 minutes (schedulling)
     catchup=False,
     max_active_runs=1,
 )
@@ -67,6 +68,7 @@ def research_library():
     def list_pdfs():
         import sqlite3
 
+        # this path should match the local rclone mount
         papers_dir = Path.home() / "Documents/ResearchLibraryDrive/papers"
 
         if not papers_dir.is_dir():
@@ -90,6 +92,7 @@ def research_library():
 
                 processed = {row[0] for row in rows}
 
+        # filenames identify papers that have already been processed
         pdfs = sorted(
             str(pdf)
             for pdf in papers_dir.glob("*.pdf")
@@ -142,6 +145,7 @@ def research_library():
 
         records = []
 
+        # ollama exposes an OpenAI API locally
         with OpenAI(
                 base_url="http://localhost:11434/v1",
                 api_key="ollama",
@@ -151,7 +155,7 @@ def research_library():
             for markdown_path in markdown_paths:
                 md_path = Path(markdown_path)
 
-                # Temporary: use an excerpt while testing.
+                # limit the excerpt to keep local model requests
                 text = md_path.read_text(encoding="utf-8")[:4000]
 
                 metadata = request_metadata(client, text)
@@ -191,6 +195,7 @@ def research_library():
             inserted = 0
 
             for record in records:
+                # ignore existing filenames to avoid duplicate records
                 cursor = connection.execute(
                     """
                     INSERT INTO papers (
@@ -242,11 +247,13 @@ def research_library():
                 "SELECT * FROM papers ORDER BY title"
             ).fetchall()
 
+        # rebuild the page from all saved papers and not just the new ones
         cards = []
 
         for paper in papers:
             keywords = ", ".join(json.loads(paper["keywords"]))
 
+            # escape metadata before inserting it into HTML
             cards.append(f"""
                 <article>
                     <h2>{escape(paper["title"])}</h2>
@@ -298,6 +305,7 @@ def research_library():
         </html>
         """
 
+        # the mount syncs the generated page back to Drive
         output_path = output_dir / "index.html"
         output_path.write_text(html, encoding="utf-8")
 
@@ -310,6 +318,7 @@ def research_library():
         import os
         import requests
 
+        # only notify when this run added new papers
         if inserted == 0:
             print("No new papers: no notification needed.")
             return
@@ -336,6 +345,7 @@ def research_library():
     notified = notify_discord(saved)
 
     started >> pdfs
+    # send notification
     saved >> html >> notified
 
     started >> pdfs

@@ -1,0 +1,7 @@
+apache-airflow>=3.0,<4.0
+pymupdf4llm
+openai
+requests
+pendulum
+# rclone and Ollama are installed separately, outside pip.
+# sqlite3, json, pathlib, html, and os are part of Python's standard library.
