@@ -16,8 +16,6 @@ External tools:
 - **Ollama**, serving `qwen2.5:3b` at `http://localhost:11434/v1`.
 - A **Discord webhook** targeting the notification channel.
 
-The Python environment containing these packages should be active before Airflow starts. Its location depends on the local setup and does not need to be inside the repository. For a fresh installation, the [official Airflow installation instructions](https://airflow.apache.org/docs/apache-airflow/stable/start.html) describe the setup; the Python and Airflow versions should match the project owner's tested configuration, with the corresponding Python constraints.
-
 ## Before starting
 
 The project owner provides:
