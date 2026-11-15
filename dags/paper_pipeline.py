@@ -314,27 +314,42 @@ def research_library():
 
 
     @task
-    def notify_discord(inserted):
+    def notify_discord(inserted, records):
         import os
         import requests
 
-        # only notify when this run added new papers
         if inserted == 0:
             print("No new papers: no notification needed.")
             return
 
-        response = requests.post(
-            os.environ["DISCORD_WEBHOOK_URL"],
-            params={"wait": "true"},
-            json={
-                "content": (
-                    f"Research Library: {inserted} new paper(s) processed. "
-                    "The HTML library has been updated."
-                )
-            },
-            timeout=15,
+        webhook_url = os.environ["DISCORD_WEBHOOK_URL"]
+
+        def send_message(content):
+            response = requests.post(
+                webhook_url,
+                params={"wait": "true"},
+                json={"content": content},
+                timeout=15,
+            )
+            response.raise_for_status()
+
+        # Send the general notification
+        send_message(
+            f"**Research Library: {inserted} new paper(s) processed.**\n"
+            "The HTML library has been updated."
         )
-        response.raise_for_status()
+
+        # Send an individual notification for each paper
+        for paper in records:
+            keywords = ", ".join(paper["keywords"])
+
+            message = (
+                f"**Title:** {paper['title']}\n"
+                f"**Keywords:** {keywords}\n"
+                f"**Summary:** {paper['summary']}"
+            )
+
+            send_message(message)
 
     started = start_pipeline()
     pdfs = list_pdfs()
@@ -342,10 +357,9 @@ def research_library():
     metadata = generate_metadata(converted)
     saved = save_metadata(metadata)
     html = generate_html()
-    notified = notify_discord(saved)
+    notified = notify_discord(saved, metadata)
 
     started >> pdfs
-    # send notification
     saved >> html >> notified
 
     started >> pdfs
